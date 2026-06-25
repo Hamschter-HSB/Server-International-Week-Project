@@ -29,7 +29,7 @@ const corsOptions = {
 };
 
 // MongoDB (NB: no connection in test env)
-if (process.env.NODE_ENV !== "test") {
+if (false /* temporarily disabled: process.env.NODE_ENV !== "test" */) {
   const mongoDB = process.env.MONGODB_URI || env.dbURL;
   mongoose.connect(mongoDB);
   mongoose.Promise = global.Promise;
@@ -48,8 +48,44 @@ app.use((req, _res, next) => {
   next();
 });
 
-app.use("/api", apiRouter);
+// Globale Variable für den letzten Abstand
+let latestDistance = null;
+let updateCount = 0;
 
+// Beispiel-Funktion für eure Musik-Logik
+function processMusicTone(distance) {
+    // Da dies außerhalb der Antwortschleife läuft, verlangsamt es den ESP32 nicht.
+    latestDistance = distance; // Speichere den Wert für das Frontend
+    updateCount++; // Zähler erhöhen, damit das Frontend auch identische aufeinanderfolgende Werte erkennt
+    if (distance === 0) {
+        console.log("-> Sound STOP / Mute");
+    } else {
+        console.log(`-> Frequenz/Lautstärke anpassen für Distanz: ${distance} cm`);
+    }
+}
+
+// Endpunkt für das Frontend zum Abrufen des neuesten Werts
+app.get('/api/distance', (req, res) => {
+    res.json({ distance: latestDistance, updateCount });
+});
+
+// Die optimierte Route für den ESP32 (passend zu eurem PHP-Äquivalent)
+app.get('/echo_get.php', (req, res) => {
+    const distanceStr = req.query.string;
+    
+    // 1. SOFORTige Antwort an den ESP32 senden, um die Verbindung freizugeben!
+    res.sendStatus(200); 
+
+    // 2. Daten asynchron im Hintergrund verarbeiten
+    if (distanceStr !== undefined) {
+        const distance = parseInt(distanceStr, 10);
+        
+        // Hier wird euer Musik-Trigger aufgerufen
+        processMusicTone(distance);
+    }
+});
+
+app.use("/api", apiRouter);
 app.use((_req, res) => {
   res.status(404).send({ error: 1, data: "Invalid API route" });
 });

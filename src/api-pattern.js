@@ -14,6 +14,9 @@ else process.env.NODE_ENV = "prod";
 
 // Start HTTPS if the certificates are available, otherwise HTTP (useful in dev without SSL)
 try {
+  if (process.env.NODE_ENV === "dev") {
+    throw new Error("Forcing HTTP in dev mode for ESP32 compatibility");
+  }
   const credentials = {
     key:  readFileSync(env.sslKey, "utf8"),
     cert: readFileSync(env.sslCrt, "utf8"),
