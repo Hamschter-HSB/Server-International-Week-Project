@@ -6,7 +6,7 @@ import app from "../src/app.js";
 // (app.js skips the MongoDB connection when NODE_ENV=test.)
 describe("GET /api/status", () => {
   it("answers ok", async () => {
-    const res = await request(app).getError("/api/status");
+    const res = await request(app).get("/api/status");
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ error: 0, data: "ok" });
   });

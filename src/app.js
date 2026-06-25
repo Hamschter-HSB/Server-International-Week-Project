@@ -52,21 +52,55 @@ app.use((req, _res, next) => {
 let latestDistance = null;
 let updateCount = 0;
 
+// Liste aller per Server-Sent Events (SSE) verbundenen Frontend-Clients
+let sseClients = [];
+
+// Funktion zum Senden von Updates an alle verbundenen SSE-Clients
+function broadcastDistance(distance, updateCount) {
+    const payload = JSON.stringify({ distance, updateCount });
+    sseClients.forEach(client => {
+        client.write(`data: ${payload}\n\n`);
+    });
+}
+
 // Beispiel-Funktion für eure Musik-Logik
 function processMusicTone(distance) {
     // Da dies außerhalb der Antwortschleife läuft, verlangsamt es den ESP32 nicht.
     latestDistance = distance; // Speichere den Wert für das Frontend
     updateCount++; // Zähler erhöhen, damit das Frontend auch identische aufeinanderfolgende Werte erkennt
+    
+    // Sende das Event sofort an alle via SSE verbundenen Clients
+    broadcastDistance(distance, updateCount);
+
     if (distance === 0) {
         console.log("-> Sound STOP / Mute");
-    } else {
+    }
+    else {
         console.log(`-> Frequenz/Lautstärke anpassen für Distanz: ${distance} cm`);
     }
 }
 
-// Endpunkt für das Frontend zum Abrufen des neuesten Werts
+// Endpunkt für das Frontend zum Abrufen des neuesten Werts (Fallback/Polling)
 app.get('/api/distance', (req, res) => {
     res.json({ distance: latestDistance, updateCount });
+});
+
+// SSE Endpoint für das Frontend für Echtzeit-Updates ohne Polling-Latenz
+app.get('/api/distance-stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Verhindert Buffering durch Proxies (z.B. Nginx/Vite Dev Server)
+
+    // Sende sofort den aktuellen Status bei Verbindungsaufbau
+    const payload = JSON.stringify({ distance: latestDistance, updateCount });
+    res.write(`data: ${payload}\n\n`);
+
+    sseClients.push(res);
+
+    req.on('close', () => {
+        sseClients = sseClients.filter(client => client !== res);
+    });
 });
 
 // Die optimierte Route für den ESP32 (passend zu eurem PHP-Äquivalent)
