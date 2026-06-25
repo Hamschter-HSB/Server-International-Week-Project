@@ -1,36 +1,36 @@
 <template>
   <div class="simple-app">
-    <h1>AeroSynth Theremin Test-Interface</h1>
+    <h1>Theremin Management</h1>
     
     <div class="connection-status">
-      Status: <strong>{{ serverConnected ? 'ESP32 Live (Verbunden)' : 'Suche Verbindung...' }}</strong>
+      Status: <strong>{{ serverConnected ? 'ESP32 Live (Connected)' : 'Connecting...' }}</strong>
     </div>
 
     <div class="section distance-section">
-      <h2>Aktuelle Distanz</h2>
+      <h2>Current Distance</h2>
       <div class="distance-value">
-        <span v-if="currentDistance === null">Warten auf Sensor-Daten...</span>
-        <span v-else-if="currentDistance === 0">STANDBY (Gerät ausgeschaltet)</span>
+        <span v-if="currentDistance === null">Waiting for sensor data...</span>
+        <span v-else-if="currentDistance === 0">STANDBY (Device Off)</span>
         <span v-else-if="currentDistance < minDistance || currentDistance > maxDistance">
-          Außerhalb des Bereichs: <strong>{{ currentDistance }} cm</strong> (Kein Ton)
+          Out of range: <strong>{{ currentDistance }} cm</strong> (No Sound)
         </span>
         <span v-else>
-          <strong>{{ currentDistance }} cm</strong> (Tonhöhe: {{ Math.round(currentFreq) }} Hz)
+          <strong>{{ currentDistance }} cm</strong> (Pitch: {{ Math.round(currentFreq) }} Hz)
         </span>
       </div>
     </div>
 
     <div class="section audio-controls">
-      <h2>Audio &amp; Synthesizer Einstellungen</h2>
+      <h2>Audio &amp; Synthesizer Settings</h2>
       
       <div class="control-group">
         <button @click="toggleSound" class="control-btn" :class="{ 'active': soundEnabled }">
-          {{ soundEnabled ? '🔊 Sound stummschalten' : '🔇 Sound aktivieren' }}
+          {{ soundEnabled ? '🔊 Mute Sound' : '🔇 Enable Sound' }}
         </button>
       </div>
 
       <div class="control-group">
-        <label>Wellenform: </label>
+        <label>Waveform: </label>
         <button 
           v-for="wave in ['sine', 'triangle', 'sawtooth', 'square']" 
           :key="wave"
@@ -42,7 +42,7 @@
       </div>
 
       <div class="control-group">
-        <label>Lautstärke: </label>
+        <label>Volume: </label>
         <input 
           type="range" 
           min="0" 
@@ -55,31 +55,55 @@
       </div>
 
       <div class="control-group">
-        <label>Min Frequenz: </label>
+        <label>Min Frequency: </label>
         <input type="range" min="60" max="400" step="10" v-model.number="minFreq" />
-        <span>{{ minFreq }} Hz (wenn weit weg)</span>
+        <span>{{ minFreq }} Hz (when far away)</span>
       </div>
 
       <div class="control-group">
-        <label>Max Frequenz: </label>
+        <label>Max Frequency: </label>
         <input type="range" min="500" max="2000" step="50" v-model.number="maxFreq" />
-        <span>{{ maxFreq }} Hz (wenn nah dran)</span>
+        <span>{{ maxFreq }} Hz (when close)</span>
+      </div>
+    </div>
+
+    <div class="section recording-section">
+      <h2>Recording &amp; Playback</h2>
+      <div class="control-group">
+        <button v-if="!isRecording" @click="startRecording" style="background-color: #ef4444; color: white;">
+          🔴 Start Recording
+        </button>
+        <button v-else @click="stopRecording" style="background-color: #22c55e; color: white;">
+          ⏹ Stop Recording
+        </button>
+        <span v-if="isRecording" class="recording-indicator">Recording...</span>
+        <span v-if="isPlaybackMode" class="playback-indicator">Playing Track... <button @click="stopTrack" style="margin-left: 10px; padding: 2px 8px;">Stop Playback</button></span>
+      </div>
+      
+      <div v-if="savedTracks.length > 0" class="tracks-list">
+        <h3>Saved Soundtracks</h3>
+        <ul>
+          <li v-for="track in savedTracks" :key="track.id">
+            Track ID: {{ track.id.substring(0, 8) }} ({{ track.events ? track.events.length : 0 }} events)
+            <button @click="playTrack(track)" :disabled="isRecording || isPlaybackMode">▶ Play</button>
+          </li>
+        </ul>
       </div>
     </div>
 
     <div class="section visualizer-section">
-      <h2>Oszilloskop Visualisierung</h2>
+      <h2>Oscilloscope Visualization</h2>
       <canvas ref="canvasRef" width="600" height="150"></canvas>
     </div>
 
     <div class="section log-section">
-      <h2>Ereignisprotokoll (letzte 10)</h2>
+      <h2>Event Log (last 10)</h2>
       <ul v-if="events.length > 0">
         <li v-for="event in events" :key="event.id">
-          [{{ event.time }}] Distanz: {{ event.distance }} cm - {{ event.status }}
+          [{{ event.time }}] Distance: {{ event.distance }} cm - {{ event.status }}
         </li>
       </ul>
-      <span v-else>Noch keine Log-Einträge...</span>
+      <span v-else>No log entries yet...</span>
     </div>
   </div>
 </template>
@@ -106,6 +130,14 @@ let animationId = null
 let wavePhase = 0
 let eventSource = null
 
+// Recording State
+const isRecording = ref(false)
+const recordingStartTime = ref(0)
+const currentRecording = ref([])
+const savedTracks = ref([])
+const isPlaybackMode = ref(false)
+let trackTimeouts = []
+
 // Web Audio API
 let audioCtx = null
 let oscillator = null
@@ -127,7 +159,7 @@ const initAudio = () => {
     gainNode.connect(audioCtx.destination)
     oscillator.start()
   } catch (error) {
-    console.error("Web Audio API konnte nicht initialisiert werden:", error)
+    console.error("Web Audio API could not be initialized:", error)
   }
 }
 
@@ -192,6 +224,111 @@ watch([minDistance, maxDistance, minFreq, maxFreq, masterVolume, waveType], () =
   }
 })
 
+// Recording Logic
+const loadTracks = async () => {
+  try {
+    const res = await fetch('/api/tracks')
+    if (res.ok) {
+      savedTracks.value = await res.json()
+    }
+  } catch(e) {
+    console.error("Failed to load tracks", e)
+  }
+}
+
+const startRecording = () => {
+  isRecording.value = true
+  currentRecording.value = []
+  recordingStartTime.value = Date.now()
+}
+
+const stopRecording = async () => {
+  isRecording.value = false
+  if (currentRecording.value.length === 0) return
+  
+  try {
+    const res = await fetch('/api/tracks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trackData: currentRecording.value })
+    })
+    if (res.ok) {
+      const newTrack = await res.json()
+      savedTracks.value.push(newTrack)
+    }
+  } catch (e) {
+    console.error("Failed to save track", e)
+  }
+}
+
+const playTrack = (track) => {
+  if (isPlaybackMode.value) stopTrack()
+  isPlaybackMode.value = true
+  
+  if (!audioCtx) {
+    initAudio()
+  }
+  if (!soundEnabled.value) {
+    soundEnabled.value = true
+  }
+  
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume()
+  }
+  
+  track.events.forEach(event => {
+    const timeout = setTimeout(() => {
+      currentDistance.value = event.distance
+      updateAudio(event.distance)
+      addLogEntry(event.distance, `Playback (Track: ${track.id.substring(0, 8)})`)
+    }, event.timeOffset)
+    trackTimeouts.push(timeout)
+  })
+  
+  const lastEvent = track.events[track.events.length - 1]
+  const duration = lastEvent ? lastEvent.timeOffset + 500 : 500
+  
+  const endTimeout = setTimeout(() => {
+    stopTrack()
+  }, duration)
+  trackTimeouts.push(endTimeout)
+}
+
+const stopTrack = () => {
+  trackTimeouts.forEach(clearTimeout)
+  trackTimeouts = []
+  isPlaybackMode.value = false
+  updateAudio(null)
+  currentDistance.value = null
+}
+
+const addLogEntry = (distanceVal, customStatus = null) => {
+  if (distanceVal === null) return
+  
+  let statusLabel = customStatus
+  if (!statusLabel) {
+    statusLabel = 'Playing'
+    if (distanceVal === 0) {
+      statusLabel = 'Standby (Off)'
+    } else if (distanceVal < minDistance.value) {
+      statusLabel = 'Too close'
+    } else if (distanceVal > maxDistance.value) {
+      statusLabel = 'Too far'
+    }
+  }
+
+  events.value.unshift({
+    id: Date.now() + Math.random(),
+    time: new Date().toLocaleTimeString(),
+    distance: distanceVal,
+    status: statusLabel
+  })
+
+  if (events.value.length > 10) {
+    events.value.pop()
+  }
+}
+
 // SSE Connection
 const connectSSE = () => {
   if (eventSource) {
@@ -205,6 +342,8 @@ const connectSSE = () => {
   }
 
   eventSource.onmessage = (event) => {
+    if (isPlaybackMode.value) return // Ignore live data while playing back
+
     try {
       const data = JSON.parse(event.data)
       if (data && data.updateCount !== undefined) {
@@ -212,32 +351,18 @@ const connectSSE = () => {
         currentDistance.value = distanceVal
 
         updateAudio(distanceVal)
+        addLogEntry(distanceVal)
 
-        if (distanceVal !== null) {
-          const inRange = distanceVal >= minDistance.value && distanceVal <= maxDistance.value
-          let statusLabel = 'Spielend'
-          if (distanceVal === 0) {
-            statusLabel = 'Standby (Aus)'
-          } else if (distanceVal < minDistance.value) {
-            statusLabel = 'Zu nah'
-          } else if (distanceVal > maxDistance.value) {
-            statusLabel = 'Zu weit'
-          }
-
-          events.value.unshift({
-            id: data.updateCount,
-            time: new Date().toLocaleTimeString(),
-            distance: distanceVal,
-            status: statusLabel
+        // Record the event if recording is active
+        if (isRecording.value) {
+          currentRecording.value.push({
+            timeOffset: Date.now() - recordingStartTime.value,
+            distance: distanceVal
           })
-
-          if (events.value.length > 10) {
-            events.value.pop()
-          }
         }
       }
     } catch (e) {
-      console.error("Fehler beim Parsen der Sensordaten:", e)
+      console.error("Error parsing sensor data:", e)
     }
   }
 
@@ -260,11 +385,13 @@ const drawVisualizer = () => {
   let frequencyFactor = 1
   let speed = 0.03
 
-  if (isPlaying.value && soundEnabled.value) {
+  if (isPlaying.value && soundEnabled.value && currentDistance.value !== null) {
     const t = (currentDistance.value - minDistance.value) / (maxDistance.value - minDistance.value)
-    amplitude = 10 + (1 - t) * 35 
-    frequencyFactor = 1 + (1 - t) * 5
-    speed = 0.03 + (1 - t) * 0.08
+    // Clamp t between 0 and 1 just in case
+    const clampedT = Math.max(0, Math.min(1, t))
+    amplitude = 10 + (1 - clampedT) * 35 
+    frequencyFactor = 1 + (1 - clampedT) * 5
+    speed = 0.03 + (1 - clampedT) * 0.08
   } else {
     amplitude = 2
     frequencyFactor = 0.5
@@ -282,7 +409,7 @@ const drawVisualizer = () => {
   // Draw wave
   ctx.beginPath()
   ctx.lineWidth = 2
-  ctx.strokeStyle = '#007bff'
+  ctx.strokeStyle = isPlaybackMode.value ? '#22c55e' : (isRecording.value ? '#ef4444' : '#007bff')
   
   for (let x = 0; x < w; x++) {
     let waveFormOffset = 0
@@ -307,6 +434,7 @@ const drawVisualizer = () => {
 }
 
 onMounted(() => {
+  loadTracks()
   connectSSE()
   drawVisualizer()
 })
@@ -321,6 +449,7 @@ onUnmounted(() => {
   if (audioCtx) {
     audioCtx.close()
   }
+  stopTrack()
 })
 </script>
 
@@ -373,6 +502,12 @@ h2 {
   padding-bottom: 6px;
 }
 
+h3 {
+  font-size: 16px;
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
 @media (prefers-color-scheme: dark) {
   h2 {
     border-color: #334155;
@@ -413,6 +548,11 @@ button.active {
   border-color: #2563eb;
 }
 
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 input[type="range"] {
   flex-grow: 1;
   max-width: 250px;
@@ -442,5 +582,45 @@ ul {
 li {
   font-family: monospace;
   margin-bottom: 4px;
+}
+
+.recording-indicator {
+  color: #ef4444;
+  font-weight: bold;
+  animation: pulse 1.5s infinite;
+}
+
+.playback-indicator {
+  color: #22c55e;
+  font-weight: bold;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+.tracks-list ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.tracks-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  margin-bottom: 4px;
+  background: rgba(255,255,255,0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  .tracks-list li {
+    border-color: #334155;
+    background: rgba(0,0,0,0.2);
+  }
 }
 </style>

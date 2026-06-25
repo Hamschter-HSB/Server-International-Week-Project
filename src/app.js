@@ -3,7 +3,8 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
 import mongoose from "mongoose";
-
+import fs from "fs";
+import { v4 as uuidv4 } from "uuid";
 import { secretKey, environments } from "./commons/config.js";
 import { getStatus } from "./commons/errors.js";
 import apiRouter from "./routes/api.route.js";
@@ -116,6 +117,49 @@ app.get('/echo_get.php', (req, res) => {
         
         // Hier wird euer Musik-Trigger aufgerufen
         processMusicTone(distance);
+    }
+});
+
+// --- AUDIO TRACK RECORDING ENDPOINTS ---
+const TRACKS_FILE = './tracks.json';
+
+// Initialize tracks file if not exists
+if (!fs.existsSync(TRACKS_FILE)) {
+    fs.writeFileSync(TRACKS_FILE, JSON.stringify([]));
+}
+
+app.post('/api/tracks', (req, res) => {
+    try {
+        const { trackData } = req.body;
+        if (!trackData || !Array.isArray(trackData)) {
+            return res.status(400).json({ error: 'Invalid track data' });
+        }
+        
+        const newTrack = {
+            id: uuidv4(),
+            timestamp: new Date().toISOString(),
+            events: trackData
+        };
+        
+        const tracks = JSON.parse(fs.readFileSync(TRACKS_FILE, 'utf8'));
+        tracks.push(newTrack);
+        fs.writeFileSync(TRACKS_FILE, JSON.stringify(tracks, null, 2));
+        
+        res.status(201).json(newTrack);
+    } catch (err) {
+        console.error('Error saving track:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+app.get('/api/tracks', (req, res) => {
+    try {
+        const tracks = JSON.parse(fs.readFileSync(TRACKS_FILE, 'utf8'));
+        // Return without full event data for smaller payload in list, or just return everything
+        res.json(tracks);
+    } catch (err) {
+        console.error('Error reading tracks:', err);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
