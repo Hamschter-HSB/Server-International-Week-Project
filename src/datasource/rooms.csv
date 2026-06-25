@@ -1,0 +1,4 @@
+name,uuid,building,env
+room1,3f2a1c8e-6b4d-4e9a-8c1f-2d7b5a9e0c11,A,all
+room2,a91e7d24-0c53-4f86-b2a7-1e8c6d4f9b30,B,all
+room3,7c5b9e10-2a4d-4c8f-9e3a-6b1d0f7c2e88,C,all

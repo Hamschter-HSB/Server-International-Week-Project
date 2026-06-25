@@ -1,0 +1,4 @@
+username,password,email,permissions,env
+admin,password,admin@example.fr,ADMIN,all
+user1,password,user1@example.fr,REGISTERED,all
+user2,password,user2@example.fr,REGISTERED,all

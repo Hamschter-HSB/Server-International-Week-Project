@@ -1,0 +1,471 @@
+openapi: 3.1.0
+info:
+  title: API-Pattern
+  version: 1.0.0
+  description: |
+    REST API skeleton (Express + MongoDB/Mongoose + JWT) serving as a starting
+    point for a student project. Exposes authentication (accounts) and a `rooms`
+    CRUD.
+
+    ## Authentication
+    Logging in (`POST /auth/login`) sets an `access_token` cookie (httpOnly,
+    signed) **and** returns an `xsrfToken` in the body. Every protected route
+    requires both: the cookie is sent automatically by the browser, and the
+    client must send the `xsrfToken` back in the `X-XSRF-TOKEN` header.
+
+    ## Response shape
+    All controllers return `{ error, data, context }`:
+    - `error` — integer (`0` = success, otherwise an error code),
+    - `data` — the payload (variable type),
+    - `context` — optional structured details of an error (`null` otherwise).
+
+    The HTTP code is carried by the response itself, not by the body.
+    Exception: `GET /status` returns a minimal `{ error: 0, data: "ok" }`.
+
+servers:
+  - url: https://localhost:12345/api
+    description: Development (NODE_ENV=dev)
+  - url: http://localhost:3000/api
+    description: Production (NODE_ENV=prod)
+
+tags:
+  - name: Status
+    description: Public health check
+  - name: Auth
+    description: Login / logout
+  - name: Accounts
+    description: Management of one's own account
+  - name: Rooms
+    description: Rooms CRUD
+
+paths:
+  /status:
+    get:
+      tags: [Status]
+      summary: Public health check
+      description: Requires neither authentication nor database access.
+      security: []
+      responses:
+        "200":
+          description: The API is reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: integer
+                    example: 0
+                  data:
+                    type: string
+                    example: ok
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login
+      description: |
+        Checks the credentials, sets the `access_token` cookie and returns the
+        `xsrfToken` to keep on the client side.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  example: admin
+                password:
+                  type: string
+                  format: password
+                  example: password
+      responses:
+        "200":
+          description: Logged in; `access_token` cookie set
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+              description: Signed httpOnly `access_token` cookie
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Answer"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          xsrfToken:
+                            type: string
+                          account:
+                            $ref: "#/components/schemas/Account"
+        "400":
+          description: Missing username or password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Answer"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Answer"
+
+  /auth/logout:
+    delete:
+      tags: [Auth]
+      summary: Logout
+      description: Clears the `access_token` cookie.
+      security: []
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Answer"
+                  - type: object
+                    properties:
+                      data:
+                        type: boolean
+                        example: true
+
+  /accounts/me/password:
+    patch:
+      tags: [Accounts]
+      summary: Change one's own password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+      responses:
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Answer"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Account"
+        "400":
+          description: Missing or too short password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Answer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /accounts/me/email:
+    patch:
+      tags: [Accounts]
+      summary: Change one's own email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "200":
+          description: Email changed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Answer"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Account"
+        "400":
+          description: Missing or already used email
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Answer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /rooms:
+    get:
+      tags: [Rooms]
+      summary: List rooms
+      description: Sorted by `name` ascending.
+      responses:
+        "200":
+          description: List of rooms
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Answer"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Room"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      tags: [Rooms]
+      summary: Create a room
+      description: Admins only. The `uuid` is randomly generated if not provided.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, building]
+              properties:
+                name:
+                  type: string
+                  example: room4
+                building:
+                  type: string
+                  example: D
+                uuid:
+                  type: string
+                  description: Optional; generated if absent
+      responses:
+        "200":
+          description: Room created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Answer"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Room"
+        "400":
+          description: Missing parameter or name already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Answer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /rooms/{id}:
+    parameters:
+      - $ref: "#/components/parameters/RoomId"
+    get:
+      tags: [Rooms]
+      summary: Get a room by id
+      responses:
+        "200":
+          description: The room
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Answer"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Room"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Rooms]
+      summary: Update a room
+      description: Admins only. Only the provided fields are updated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                building:
+                  type: string
+                uuid:
+                  type: string
+      responses:
+        "200":
+          description: Room updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Answer"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Room"
+        "400":
+          description: Name already used by another room
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Answer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Rooms]
+      summary: Delete a room
+      description: Admins only.
+      responses:
+        "200":
+          description: Room deleted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Answer"
+                  - type: object
+                    properties:
+                      data:
+                        type: boolean
+                        example: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: access_token
+      description: Signed httpOnly JWT cookie, set by `POST /auth/login`.
+    xsrfToken:
+      type: apiKey
+      in: header
+      name: X-XSRF-TOKEN
+      description: XSRF token returned by `POST /auth/login`, to replay on every protected request.
+
+  parameters:
+    RoomId:
+      name: id
+      in: path
+      required: true
+      description: MongoDB identifier of the room
+      schema:
+        type: string
+        example: 665f1c8e6b4d4e9a8c1f2d7b
+
+  schemas:
+    Answer:
+      type: object
+      description: Standard envelope of all responses.
+      properties:
+        error:
+          type: integer
+          description: 0 = success, otherwise an error code from src/commons/errors.js
+          example: 0
+        data:
+          description: Payload (variable type depending on the route)
+          nullable: true
+        context:
+          description: Optional structured details of an error
+          nullable: true
+          example: null
+      required: [error, data, context]
+
+    Account:
+      type: object
+      description: The (hashed) password is never returned (removed by toJSON).
+      properties:
+        _id:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+        permissions:
+          type: integer
+          description: Bit mask — REGISTERED = 1, ADMIN = 128
+          example: 1
+        disabled:
+          type: boolean
+
+    Room:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: 665f1c8e6b4d4e9a8c1f2d7b
+        name:
+          type: string
+          example: room1
+        uuid:
+          type: string
+          example: 3f2a1c8e-6b4d-4e9a-8c1f-2d7b5a9e0c11
+        building:
+          type: string
+          example: A
+      required: [name, uuid, building]
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT/XSRF
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Answer"
+    Forbidden:
+      description: Insufficient permissions (e.g. admin right required)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Answer"
+    NotFound:
+      description: The targeted resource does not exist
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Answer"
+
+security:
+  - cookieAuth: []
+    xsrfToken: []
